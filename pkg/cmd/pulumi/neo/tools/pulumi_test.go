@@ -1121,3 +1121,79 @@ func (f *fakeHTTPStack) StackIdentifier() client.StackIdentifier {
 // Compile-time assertion: fakeHTTPStack must satisfy httpstate.Stack so the
 // type assertion in autonamingStackContextFor succeeds.
 var _ httpstate.Stack = (*fakeHTTPStack)(nil)
+
+func TestPulumi_RunAttributesOperationsToNeo(t *testing.T) {
+	// Ensure an outer agent harness in the environment does not override Neo attribution.
+	t.Setenv("CLAUDECODE", "1")
+	t.Setenv("PULUMI_FALLBACK_TO_STATE_SECRETS_MANAGER", "false")
+
+	//nolint:paralleltest // mutates environment and global DefaultLoginManager
+	for _, isPreview := range []bool{true, false} {
+		name := "pulumi_up"
+		if isPreview {
+			name = "pulumi_preview"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := newProjectDir(t)
+			ref := &backend.MockStackReference{
+				NameV:               tokens.MustParseStackName("dev"),
+				FullyQualifiedNameV: "organization/p/dev",
+			}
+			be := &backend.MockBackend{}
+			stk := &backend.MockStack{
+				RefF:     func() backend.StackReference { return ref },
+				BackendF: func() backend.Backend { return be },
+				DefaultSecretManagerF: func(context.Context, *workspace.ProjectStack) (secrets.Manager, error) {
+					return b64.NewBase64SecretsManager(), nil
+				},
+			}
+			be.ParseStackReferenceF = func(string) (backend.StackReference, error) { return ref, nil }
+			be.GetStackF = func(context.Context, backend.StackReference) (backend.Stack, error) { return stk, nil }
+
+			var recordedEnv map[string]string
+			be.PreviewF = func(_ context.Context, _ backend.Stack, op backend.UpdateOperation) (
+				*deploy.Plan, display.ResourceChanges, error,
+			) {
+				recordedEnv = op.M.Environment
+				return nil, nil, nil
+			}
+			be.UpdateF = func(_ context.Context, _ backend.Stack, op backend.UpdateOperation) (
+				display.ResourceChanges, error,
+			) {
+				recordedEnv = op.M.Environment
+				return nil, nil
+			}
+
+			previous := cmdBackend.DefaultLoginManager
+			cmdBackend.DefaultLoginManager = &cmdBackend.MockLoginManager{
+				CurrentF: func(context.Context, pkgWorkspace.Context, diag.Sink, string, *workspace.Project, bool) (
+					backend.Backend, error,
+				) {
+					return be, nil
+				},
+				LoginF: func(context.Context, pkgWorkspace.Context, diag.Sink, string, *workspace.Project,
+					bool, bool, colors.Colorization, ...cmdBackend.LoginOption,
+				) (backend.Backend, error) {
+					return be, nil
+				},
+			}
+			t.Cleanup(func() { cmdBackend.DefaultLoginManager = previous })
+
+			p := &Pulumi{Cwd: dir, Workspace: &pkgWorkspace.MockContext{
+				ReadProjectF: func(string) (*workspace.Project, string, error) {
+					return &workspace.Project{Name: "p"}, dir, nil
+				},
+			}}
+			args := pulumiArgs{ProjectName: "p", StackName: "dev", LocalPulumiDir: dir}
+			result, err := p.run(t.Context(), args, isPreview)
+			require.NoError(t, err)
+			if result.EventsFile != "" {
+				t.Cleanup(func() { require.NoError(t, os.Remove(result.EventsFile)) })
+			}
+
+			require.NotNil(t, recordedEnv)
+			assert.Equal(t, "cli", recordedEnv[backend.ExecutionKind])
+			assert.Equal(t, "neo", recordedEnv[backend.ExecutionAgent])
+		})
+	}
+}

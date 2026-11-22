@@ -40,6 +40,7 @@ import (
 	"github.com/pulumi/pulumi/pkg/v3/resource/deploy"
 	"github.com/pulumi/pulumi/pkg/v3/util/cancel"
 	pkgWorkspace "github.com/pulumi/pulumi/pkg/v3/workspace"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/constant"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/diag"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/diag/colors"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/util/cmdutil"
@@ -298,7 +299,7 @@ func (p *Pulumi) run(ctx context.Context, a pulumiArgs, isPreview bool) (pulumiR
 	// Pass nil for flags: GetUpdateMetadata only uses them to record
 	// "pulumi.flag.<name>" entries, and Neo has no CLI flags to record.
 	m, err := metadata.GetUpdateMetadata("" /*message*/, root,
-		"neo" /*execKind*/, "" /*execAgent*/, false /*updatePlan*/, cfg, nil)
+		constant.ExecKindCLI /*execKind*/, "neo" /*execAgent*/, false /*updatePlan*/, cfg, nil)
 	if err != nil {
 		return failedResult(a, "", fmt.Errorf("gathering metadata: %w", err))
 	}
