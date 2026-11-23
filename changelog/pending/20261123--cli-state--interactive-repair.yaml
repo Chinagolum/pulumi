@@ -1,0 +1,4 @@
+component: cli/state
+kind: improvement
+body: "`pulumi state repair` now asks which copy of a duplicate resource to keep, and which provider to use for a resource that refers to a provider missing from the state, instead of giving up"
+time: 2026-11-23T21:10:00.000000000+02:00

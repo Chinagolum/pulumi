@@ -16,6 +16,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -58,6 +59,19 @@ type stateRepairCmd struct {
 	Workspace pkgWorkspace.Context
 	// The login manager to use for authenticating with and loading backends.
 	LoginManager cmdBackend.LoginManager
+
+	// Prompt asks the user to choose how to resolve problems that can't be repaired automatically. If nil, the user is
+	// prompted on the command's standard input and output.
+	Prompt stateRepairPrompter
+}
+
+// prompt asks the user to pick one of the given options, returning the index of the chosen option.
+func (cmd *stateRepairCmd) prompt(msg string, options []string) (int, error) {
+	if cmd.Prompt != nil {
+		return cmd.Prompt(msg, options)
+	}
+	return ui.PromptUserIndexErr(msg, options, cmd.Args.Colorizer,
+		survey.WithStdio(cmd.Stdin, cmd.Stdout, cmd.Stderr))
 }
 
 // A set of arguments for the `state repair` command.
@@ -92,6 +106,13 @@ are no longer present in the state. If the state is already valid, this command
 will not attempt to make or write any changes. If the state is not already
 valid, and remains invalid after repair has been attempted, this command will
 not write any changes.
+
+Some problems can't be repaired automatically because only you know what is
+correct: a resource that appears more than once, or a resource that refers to a
+provider that is not in the state. Unless --yes is passed, this command will ask
+you which copy of a duplicate resource to keep, and which provider a resource
+should use instead of a missing one. All changes are summarised for you to
+confirm before the state is written.
 `,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.Flags().Visit(func(f *pflag.Flag) {
@@ -180,6 +201,22 @@ func (cmd *stateRepairCmd) run(ctx context.Context) error {
 	// file a report we can hopefully diagnose both what caused the invalid snapshot but also why we failed to repair
 	// it (assuming a repair was possible).
 	err = snap.VerifyIntegrity()
+
+	// Some problems, such as duplicate resources or references to providers that aren't in the state, can't be
+	// repaired automatically because only the user knows what's correct. Unless --yes was passed, ask the user how to
+	// resolve them and check the result again.
+	var interactiveResult *interactiveRepairResult
+	if err != nil && !cmd.Args.Yes {
+		interactiveResult, err = repairInteractively(snap, cmd.prompt)
+		if errors.Is(err, errStateRepairCancelled) || errors.Is(err, terminal.InterruptErr) {
+			sink.Infof(diag.RawMessage("" /*urn*/, "State repair cancelled, not proceeding"))
+			return nil
+		}
+		if err == nil {
+			err = snap.VerifyIntegrity()
+		}
+	}
+
 	if err != nil {
 		sink.Errorf(diag.RawMessage("" /*urn*/, cmd.manualRepairError(initialErr, err)))
 
@@ -193,7 +230,7 @@ func (cmd *stateRepairCmd) run(ctx context.Context) error {
 	if !cmd.Args.Yes {
 		sink.Infof(diag.RawMessage(
 			"", /*urn*/
-			renderStateRepairOperations(cmd.Args.Colorizer, reorderings, pruneResults),
+			renderStateRepairOperations(cmd.Args.Colorizer, reorderings, pruneResults, interactiveResult),
 		))
 
 		yes := "yes"

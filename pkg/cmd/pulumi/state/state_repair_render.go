@@ -99,8 +99,46 @@ func renderStateRepairOperations(
 	colorization colors.Colorization,
 	reorderings []*pkgresource.State,
 	pruneResults []deploy.PruneResult,
+	interactive *interactiveRepairResult,
 ) string {
 	var b strings.Builder
+
+	if interactive != nil && len(interactive.RemovedDuplicates) > 0 {
+		b.WriteString(`The following duplicate copies will be removed from the state. If they exist in the cloud provider,
+Pulumi will no longer manage them:
+
+`)
+
+		for _, state := range interactive.RemovedDuplicates {
+			b.WriteString(colorization.Colorize(colors.SpecDelete + "-" + colors.Reset + " "))
+			b.WriteString(string(state.URN))
+			b.WriteString(" (id: ")
+			b.WriteString(string(state.ID))
+			b.WriteString(")\n")
+		}
+
+		b.WriteString("\n")
+	}
+
+	if interactive != nil && len(interactive.ProviderChanges) > 0 {
+		b.WriteString(`The following resources will be changed to use a different provider:
+
+`)
+
+		for _, change := range interactive.ProviderChanges {
+			b.WriteString(colorization.Colorize(colors.SpecUpdate + "~" + colors.Reset + " "))
+			b.WriteString(string(change.URN))
+			b.WriteString("\n")
+			b.WriteString("  " + colorization.Colorize(colors.SpecDelete+"-"+colors.Reset+" "))
+			b.WriteString(change.Old)
+			b.WriteString("\n")
+			b.WriteString("  " + colorization.Colorize(colors.SpecCreate+"+"+colors.Reset+" "))
+			b.WriteString(change.New)
+			b.WriteString("\n")
+		}
+
+		b.WriteString("\n")
+	}
 
 	if len(reorderings) > 0 {
 		b.WriteString(`The following resources will be reordered to appear before their dependents:
