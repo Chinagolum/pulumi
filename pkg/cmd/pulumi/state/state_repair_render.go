@@ -104,20 +104,44 @@ func renderStateRepairOperations(
 	var b strings.Builder
 
 	if interactive != nil && len(interactive.RemovedDuplicates) > 0 {
-		b.WriteString(`The following duplicate copies will be removed from the state. If they exist in the cloud provider,
-Pulumi will no longer manage them:
-
-`)
-
-		for _, state := range interactive.RemovedDuplicates {
-			b.WriteString(colorization.Colorize(colors.SpecDelete + "-" + colors.Reset + " "))
-			b.WriteString(string(state.URN))
-			b.WriteString(" (id: ")
-			b.WriteString(string(state.ID))
-			b.WriteString(")\n")
+		// A removed copy with the same ID as the kept copy refers to the same cloud resource, which Pulumi keeps
+		// managing through the kept copy. A removed copy with a different ID refers to a separate cloud resource,
+		// which Pulumi will stop managing, so the user should check whether it still exists.
+		var sameID, differentID []removedDuplicate
+		for _, d := range interactive.RemovedDuplicates {
+			if d.Removed.ID == d.Kept.ID {
+				sameID = append(sameID, d)
+			} else {
+				differentID = append(differentID, d)
+			}
 		}
 
-		b.WriteString("\n")
+		writeRemoved := func(removed []removedDuplicate) {
+			for _, d := range removed {
+				b.WriteString(colorization.Colorize(colors.SpecDelete + "-" + colors.Reset + " "))
+				b.WriteString(string(d.Removed.URN))
+				b.WriteString(" (id: ")
+				b.WriteString(string(d.Removed.ID))
+				b.WriteString(")\n")
+			}
+			b.WriteString("\n")
+		}
+
+		if len(sameID) > 0 {
+			b.WriteString(`The following duplicate copies will be removed from the state. They have the same ID as the copy
+being kept, so Pulumi will continue to manage the resource:
+
+`)
+			writeRemoved(sameID)
+		}
+
+		if len(differentID) > 0 {
+			b.WriteString(`The following duplicate copies will be removed from the state. Their IDs differ from the copy being
+kept, so if they exist in the cloud provider, Pulumi will no longer manage them:
+
+`)
+			writeRemoved(differentID)
+		}
 	}
 
 	if interactive != nil && len(interactive.ProviderChanges) > 0 {

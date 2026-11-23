@@ -57,11 +57,18 @@ type providerReferenceChange struct {
 	New string
 }
 
+// removedDuplicate records a copy of a duplicate resource that was removed during interactive repair, along with the
+// copy the user chose to keep.
+type removedDuplicate struct {
+	Removed *pkgresource.State
+	Kept    *pkgresource.State
+}
+
 // interactiveRepairResult records the changes made during interactive repair, so that they can be summarised before
 // the user confirms that the repaired state should be written.
 type interactiveRepairResult struct {
 	// Copies of duplicate resources that were removed from the snapshot.
-	RemovedDuplicates []*pkgresource.State
+	RemovedDuplicates []removedDuplicate
 	// Provider references that were rewritten.
 	ProviderChanges []providerReferenceChange
 }
@@ -155,9 +162,8 @@ func repairInteractively(snap *deploy.Snapshot, prompt stateRepairPrompter) (*in
 		options = append(options, "Cancel repair")
 
 		choice, err := prompt(fmt.Sprintf(
-			"Resource %s appears %d times in the state. Which copy do you want to keep? "+
-				"The others will be removed from the state.",
-			dup.URN, len(dup.Copies)), options)
+			"%s %q appears %d times in the state. Which copy should be kept?",
+			dup.URN.Type(), dup.URN.Name(), len(dup.Copies)), options)
 		if err != nil {
 			return nil, err
 		}
@@ -169,7 +175,10 @@ func repairInteractively(snap *deploy.Snapshot, prompt stateRepairPrompter) (*in
 			if i == choice {
 				continue
 			}
-			result.RemovedDuplicates = append(result.RemovedDuplicates, state)
+			result.RemovedDuplicates = append(result.RemovedDuplicates, removedDuplicate{
+				Removed: state,
+				Kept:    dup.Copies[choice],
+			})
 			snap.Resources = slices.DeleteFunc(snap.Resources, func(s *pkgresource.State) bool { return s == state })
 		}
 	}
@@ -183,13 +192,14 @@ func repairInteractively(snap *deploy.Snapshot, prompt stateRepairPrompter) (*in
 
 		options := make([]string, 0, len(dangling.Candidates)+1)
 		for _, candidate := range dangling.Candidates {
-			options = append(options, fmt.Sprintf("%s (id: %s)", candidate.URN, candidate.ID))
+			options = append(options, fmt.Sprintf("%s (id: %s)", candidate.URN.Name(), candidate.ID))
 		}
 		options = append(options, "Cancel repair")
 
 		choice, err := prompt(fmt.Sprintf(
-			"Resource %s refers to provider %s, which is not in the state. Which provider should it use?",
-			dangling.Resource.URN, dangling.Reference), options)
+			"%s %q uses the provider %q (id: %s), which is not in the state. Which provider should it use?",
+			dangling.Resource.URN.Type(), dangling.Resource.URN.Name(),
+			dangling.Reference.URN().Name(), dangling.Reference.ID()), options)
 		if err != nil {
 			return nil, err
 		}

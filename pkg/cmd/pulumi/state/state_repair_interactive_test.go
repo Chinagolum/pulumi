@@ -117,11 +117,38 @@ func TestStateRepair_InteractivelyResolvesDuplicates(t *testing.T) {
 	require.Len(t, *asked, 1)
 	assert.Contains(t, (*asked)[0], "appears 2 times")
 	assert.Contains(t, fx.stdout.String(), "duplicate copies will be removed")
+	assert.Contains(t, fx.stdout.String(), "Pulumi will no longer manage them")
 	assert.Contains(t, fx.stdout.String(), `id: r1`)
 
 	require.NotNil(t, fx.imported, "Import should have proceeded")
 	require.Len(t, fx.imported.Resources, 2)
 	assert.Equal(t, resource.ID("r2"), fx.imported.Resources[1].ID)
+}
+
+//nolint:paralleltest // State repairing modifies the DisableIntegrityChecking global variable
+func TestStateRepair_DuplicateWithSameIDIsStillManaged(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping: mocking input to Survey is not supported on Windows")
+	}
+
+	// Arrange. Both copies refer to the same cloud resource, so removing one doesn't stop Pulumi managing it.
+	fx := newStateRepairCmdFixture(t, []*pkgresource.State{
+		testProvider("p1"), testResource("r1", "p1"), testResource("r1", "p1"),
+	})
+
+	prompt, _ := scriptedPrompt(t, 0)
+	fx.cmd.Prompt = prompt
+	fx.stdin.buf.WriteString("yes\r\n")
+
+	// Act.
+	err := fx.cmd.run(t.Context())
+
+	// Assert.
+	require.NoError(t, err)
+	assert.Contains(t, fx.stdout.String(), "Pulumi will continue to manage the resource")
+	assert.NotContains(t, fx.stdout.String(), "no longer manage")
+	require.NotNil(t, fx.imported, "Import should have proceeded")
+	require.Len(t, fx.imported.Resources, 2)
 }
 
 //nolint:paralleltest // State repairing modifies the DisableIntegrityChecking global variable
